@@ -12,7 +12,7 @@ from buffer import Buffer
 from model import ActorCriticModel
 from utils import batched_index_select, create_env, polynomial_decay, process_episode_info
 from worker import Worker
-
+from utils import create_env
 class PPOTrainer:
     def __init__(self, config:dict, run_id:str="run", device:torch.device=torch.device("cpu")) -> None:
         """Initializes all needed training components.
@@ -60,17 +60,22 @@ class PPOTrainer:
 
         # Init workers
         print("Step 4: Init environment workers")
-        self.workers = [Worker(self.config["environment"]) for w in range(self.num_workers)]
+        self.env = create_env(self.config["environment"])
+        #self.workers = [Worker(self.config["environment"]) for w in range(self.num_workers)]
+
         self.worker_ids = range(self.num_workers)
         self.worker_current_episode_step = torch.zeros((self.num_workers, ), dtype=torch.long)
         # Reset workers (i.e. environments)
         print("Step 5: Reset workers")
-        for worker in self.workers:
-            worker.child.send(("reset", None))
+
+        #for worker in self.workers:
+        #    worker.child.send(("reset", None))
+        self.obs=self.env.reset()
         # Grab initial observations and store them in their respective placeholder location
-        self.obs = np.zeros((self.num_workers,) + observation_space.shape, dtype=np.float32)
-        for w, worker in enumerate(self.workers):
-            self.obs[w] = worker.child.recv()
+        #self.obs = np.zeros((self.num_workers,) + observation_space.shape, dtype=np.float32)
+
+        #for w, worker in enumerate(self.workers):
+        #    self.obs[w] = worker.child.recv()
 
         # Setup placeholders for each worker's current episodic memory
         self.memory = torch.zeros((self.num_workers, self.max_episode_length, self.num_blocks, self.embed_dim), dtype=torch.float32)
@@ -139,6 +144,10 @@ class PPOTrainer:
             self._write_gradient_summary(update, grad_info)
             self._write_training_summary(update, training_stats, episode_result)
 
+            #if(update%50==1):
+            #    self._save_model()
+
+
         # Save the trained model at the end of the training
         self._save_model()
 
@@ -186,36 +195,39 @@ class PPOTrainer:
                 self.buffer.values[:, t] = value
 
             # Send actions to the environments
-            for w, worker in enumerate(self.workers):
-                worker.child.send(("step", self.buffer.actions[w, t].cpu().numpy()))
+            #for w, worker in enumerate(self.workers):
+            #    worker.child.send(("step", self.buffer.actions[w, t].cpu().numpy()))
 
+            obs,self.buffer.rewards[:, t],done,info=self.env.step(self.buffer.actions[:, t].cpu().numpy())
             # Retrieve step results from the environments
-            for w, worker in enumerate(self.workers):
-                obs, self.buffer.rewards[w, t], self.buffer.dones[w, t], info = worker.child.recv()
-                if info: # i.e. done
-                    # Reset the worker's current timestep
-                    self.worker_current_episode_step[w] = 0
-                    # Store the information of the completed episode (e.g. total reward, episode length)
-                    episode_infos.append(info)
-                    # Reset the agent (potential interface for providing reset parameters)
-                    worker.child.send(("reset", None))
-                    # Get data from reset
-                    obs = worker.child.recv()
-                    # Break the reference to the worker's memory
+            #for w, worker in enumerate(self.workers):
+                #obs, self.buffer.rewards[w, t], self.buffer.dones[w, t], info = worker.child.recv()
+            if info: # i.e. done
+                # Reset the worker's current timestep
+                self.worker_current_episode_step[:] = 0
+                # Store the information of the completed episode (e.g. total reward, episode length)
+                for w in range(self.num_workers):
+                    episode_infos.append(info[w])
+                # Reset the agent (potential interface for providing reset parameters)
+                #worker.child.send(("reset", None))
+                self.obs=self.env.reset()
+                # Get data from reset
+                for w in range(self.num_workers):
                     mem_index = self.buffer.memory_index[w, t]
                     self.buffer.memories[mem_index] = self.buffer.memories[mem_index].clone()
                     # Reset episodic memory
-                    self.memory[w] = torch.zeros((self.max_episode_length, self.num_blocks, self.embed_dim), dtype=torch.float32)
+                    self.memory[w] = torch.zeros((self.max_episode_length, self.num_blocks, self.embed_dim),
+                                                 dtype=torch.float32)
                     if t < self.config["worker_steps"] - 1:
                         # Store memory inside the buffer
                         self.buffer.memories.append(self.memory[w])
                         # Store the reference of to the current episodic memory inside the buffer
                         self.buffer.memory_index[w, t + 1:] = len(self.buffer.memories) - 1
-                else:
-                    # Increment worker timestep
-                    self.worker_current_episode_step[w] +=1
-                # Store latest observations
-                self.obs[w] = obs
+            else:
+                # Increment worker timestep
+                self.worker_current_episode_step[:] +=1
+            # Store latest observations
+            self.obs = obs
                             
         # Compute the last value of the current observation and memory window to compute GAE
         last_value = self.get_last_value()
@@ -358,7 +370,9 @@ class PPOTrainer:
         if not os.path.exists("./models"):
             os.makedirs("./models")
         self.model.cpu()
+
         pickle.dump((self.model.state_dict(), self.config), open("./models/" + self.run_id + ".nn", "wb"))
+        print(self.model.forward(np.ones((16,87)),np.ones((16,16,3,256),np.ones((16,16)))))
         print("Model saved to " + "./models/" + self.run_id + ".nn")
 
     def close(self) -> None:

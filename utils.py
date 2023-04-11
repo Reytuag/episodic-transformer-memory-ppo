@@ -4,9 +4,10 @@ import torch
 from torch import nn
 
 from environments.cartpole_env import CartPole
-from environments.memory_gym_env import MemoryGymWrapper
-from environments.minigrid_env import Minigrid
-from environments.poc_memory_env import PocMemoryEnv
+#from environments.memory_gym_env import MemoryGymWrapper
+#from environments.minigrid_env import Minigrid
+#from environments.poc_memory_env import PocMemoryEnv
+from environments.grid_env import Grid
 
 def create_env(config:dict, render:bool=False):
     """Initializes an environment based on the provided environment name.
@@ -26,8 +27,11 @@ def create_env(config:dict, render:bool=False):
         return CartPole(mask_velocity=True)
     if config["type"] == "Minigrid":
         return Minigrid(config["name"])
+    if config["type"]== "Grid":
+        return Grid()
     if config["type"] in ["SearingSpotlights", "MortarMayhem", "MortarMayhem-Grid", "MysteryPath", "MysteryPath-Grid"]:
         return MemoryGymWrapper(env_name = config["name"], reset_params=config["reset_params"], realtime_mode=render)
+
 
 def polynomial_decay(initial:float, final:float, max_decay_steps:int, power:float, current_step:int) -> float:
     """Decays hyperparameters polynomially. If power is set to 1.0, the decay behaves linearly. 
